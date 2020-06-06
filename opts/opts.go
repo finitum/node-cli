@@ -22,8 +22,12 @@ import (
 
 	"github.com/mitchellh/go-homedir"
 	"github.com/pkg/errors"
+
 	corev1 "k8s.io/api/core/v1"
 )
+
+// MetricsPortKey determines the key of the value in the context, which can be used to retrieve the metrics port
+const MetricsPortKey = "metrics-port"
 
 // Defaults for root command options
 const (
@@ -36,10 +40,8 @@ const (
 	DefaultKubeNamespace        = corev1.NamespaceAll
 	DefaultKubeClusterDomain    = "cluster.local"
 
-	DefaultTaintEffect           = string(corev1.TaintEffectNoSchedule)
-	DefaultTaintKey              = "virtual-kubelet.io/provider"
-	DefaultStreamIdleTimeout     = 4 * time.Hour
-	DefaultStreamCreationTimeout = 30 * time.Second
+	DefaultTaintEffect = string(corev1.TaintEffectNoSchedule)
+	DefaultTaintKey    = "virtual-kubelet.io/provider"
 )
 
 // Opts stores all the options for configuring the root virtual-kubelet command.
@@ -83,11 +85,6 @@ type Opts struct {
 
 	// Startup Timeout is how long to wait for the kubelet to start
 	StartupTimeout time.Duration
-	// StreamIdleTimeout is the maximum time a streaming connection
-	// can be idle before the connection is automatically closed.
-	StreamIdleTimeout time.Duration
-	// StreamCreationTimeout is the maximum time for streaming connection
-	StreamCreationTimeout time.Duration
 
 	// KubeAPIQPS is the QPS to use while talking with kubernetes apiserver
 	KubeAPIQPS int32
@@ -128,12 +125,6 @@ func FromEnv() (*Opts, error) {
 	return o, nil
 }
 
-func New() *Opts {
-	o := &Opts{}
-	setDefaults(o)
-	return o
-}
-
 func setDefaults(o *Opts) {
 	o.OperatingSystem = DefaultOperatingSystem
 	o.NodeName = DefaultNodeName
@@ -145,8 +136,6 @@ func setDefaults(o *Opts) {
 	o.MetricsAddr = DefaultMetricsAddr
 	o.InformerResyncPeriod = DefaultInformerResyncPeriod
 	o.KubeClusterDomain = DefaultKubeClusterDomain
-	o.StreamIdleTimeout = DefaultStreamIdleTimeout
-	o.StreamCreationTimeout = DefaultStreamCreationTimeout
 }
 
 func getEnv(key, defaultValue string) string {

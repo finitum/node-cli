@@ -16,22 +16,22 @@ package root
 
 import (
 	"context"
+	"github.com/finitum/node-cli/manager"
+	"github.com/finitum/node-cli/opts"
+	"github.com/finitum/node-cli/provider"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/fields"
 	"os"
 	"path"
+	"sync"
 	"time"
 
 	"github.com/pkg/errors"
-	"github.com/spf13/cobra"
-	"github.com/virtual-kubelet/node-cli/manager"
-	"github.com/virtual-kubelet/node-cli/opts"
-	"github.com/virtual-kubelet/node-cli/provider"
 	"github.com/virtual-kubelet/virtual-kubelet/errdefs"
 	"github.com/virtual-kubelet/virtual-kubelet/log"
 	"github.com/virtual-kubelet/virtual-kubelet/node"
 	corev1 "k8s.io/api/core/v1"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/fields"
 	kubeinformers "k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/scheme"
@@ -42,48 +42,30 @@ import (
 	"k8s.io/client-go/tools/record"
 )
 
-// NewCommand creates a new top-level command.
-// This command is used to start the virtual-kubelet daemon
-func NewCommand(name string, s *provider.Store, o *opts.Opts) *cobra.Command {
-	cmd := &cobra.Command{
-		Use:   name,
-		Short: name + " provides a virtual kubelet interface for your kubernetes cluster.",
-		Long: name + ` implements the Kubelet interface with a pluggable
-backend implementation allowing users to create kubernetes nodes without running the kubelet.
-This allows users to schedule kubernetes workloads on nodes that aren't running Kubernetes.`,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return runRootCommand(cmd.Context(), s, o)
-		},
-	}
+var sharedFactory kubeinformers.SharedInformerFactory
+var once sync.Once
 
-	installFlags(cmd.Flags(), o)
-	return cmd
-}
-
-func runRootCommand(ctx context.Context, s *provider.Store, c *opts.Opts) error {
+func RunRootCommand(originalCtx context.Context, ctx context.Context, s *provider.Store, c *opts.Opts) (int, int, error) {
 	pInit := s.Get(c.Provider)
 	if pInit == nil {
-		return errors.Errorf("provider %q not found", c.Provider)
+		return 0, 0, errors.Errorf("provider %q not found", c.Provider)
 	}
 
 	client, err := newClient(c.KubeConfigPath, c.KubeAPIQPS, c.KubeAPIBurst)
 	if err != nil {
-		return err
+		return 0, 0, err
 	}
 
-	return runRootCommandWithProviderAndClient(ctx, pInit, client, c)
+	return runRootCommandWithProviderAndClient(originalCtx, ctx, pInit, client, c)
 }
 
-func runRootCommandWithProviderAndClient(ctx context.Context, pInit provider.InitFunc, client kubernetes.Interface, c *opts.Opts) error {
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-
+func runRootCommandWithProviderAndClient(_ context.Context, ctx context.Context, pInit provider.InitFunc, client kubernetes.Interface, c *opts.Opts) (int, int, error) {
 	if ok := provider.ValidOperatingSystems[c.OperatingSystem]; !ok {
-		return errdefs.InvalidInputf("operating system %q is not supported", c.OperatingSystem)
+		return 0, 0, errdefs.InvalidInputf("operating system %q is not supported", c.OperatingSystem)
 	}
 
 	if c.PodSyncWorkers == 0 {
-		return errdefs.InvalidInput("pod sync workers must be greater than 0")
+		return 0, 0, errdefs.InvalidInput("pod sync workers must be greater than 0")
 	}
 
 	var taint *corev1.Taint
@@ -91,7 +73,7 @@ func runRootCommandWithProviderAndClient(ctx context.Context, pInit provider.Ini
 		var err error
 		taint, err = getTaint(c)
 		if err != nil {
-			return err
+			return 0, 0, err
 		}
 	}
 
@@ -99,32 +81,34 @@ func runRootCommandWithProviderAndClient(ctx context.Context, pInit provider.Ini
 	podInformerFactory := kubeinformers.NewSharedInformerFactoryWithOptions(
 		client,
 		c.InformerResyncPeriod,
-		kubeinformers.WithNamespace(c.KubeNamespace),
 		kubeinformers.WithTweakListOptions(func(options *metav1.ListOptions) {
 			options.FieldSelector = fields.OneTermEqualSelector("spec.nodeName", c.NodeName).String()
 		}))
 	podInformer := podInformerFactory.Core().V1().Pods()
 
 	// Create another shared informer factory for Kubernetes secrets and configmaps (not subject to any selectors).
-	scmInformerFactory := kubeinformers.NewSharedInformerFactoryWithOptions(client, c.InformerResyncPeriod)
+	once.Do(func() {
+		sharedFactory = kubeinformers.NewSharedInformerFactoryWithOptions(client, c.InformerResyncPeriod)
+	})
+
 	// Create a secret informer and a config map informer so we can pass their listers to the resource manager.
-	secretInformer := scmInformerFactory.Core().V1().Secrets()
-	configMapInformer := scmInformerFactory.Core().V1().ConfigMaps()
-	serviceInformer := scmInformerFactory.Core().V1().Services()
+	secretInformer := sharedFactory.Core().V1().Secrets()
+	configMapInformer := sharedFactory.Core().V1().ConfigMaps()
+	serviceInformer := sharedFactory.Core().V1().Services()
 
 	rm, err := manager.NewResourceManager(podInformer.Lister(), secretInformer.Lister(), configMapInformer.Lister(), serviceInformer.Lister())
 	if err != nil {
-		return errors.Wrap(err, "could not create resource manager")
+		return 0, 0, errors.Wrap(err, "could not create resource manager")
 	}
 
 	// Start the informers now, so the provider will get a functional resource
 	// manager.
 	podInformerFactory.Start(ctx.Done())
-	scmInformerFactory.Start(ctx.Done())
+	// Never start the shared factory as we don't need it (yet)
 
 	apiConfig, err := getAPIConfig(c)
 	if err != nil {
-		return err
+		return 0, 0, err
 	}
 
 	initConfig := provider.InitConfig{
@@ -137,10 +121,24 @@ func runRootCommandWithProviderAndClient(ctx context.Context, pInit provider.Ini
 		KubeClusterDomain: c.KubeClusterDomain,
 	}
 
-	p, err := pInit(initConfig)
+	p, err := pInit(&initConfig)
 	if err != nil {
-		return errors.Wrapf(err, "error initializing provider %s", c.Provider)
+		return 0, 0, errors.Wrapf(err, "error initialising provider %s", c.Provider)
 	}
+
+	cancelHTTP, metricsPort, k8sPort, err := setupHTTPServer(ctx, p, apiConfig)
+	if err != nil {
+		return 0, 0, err
+	}
+	c.ListenPort = int32(k8sPort)
+	initConfig.DaemonPort = int32(k8sPort)
+	ctx = context.WithValue(ctx, opts.MetricsPortKey, metricsPort)
+
+	go func() {
+		defer cancelHTTP()
+
+		<-ctx.Done()
+	}()
 
 	ctx = log.WithLogger(ctx, log.G(ctx).WithFields(log.Fields{
 		"provider":         c.Provider,
@@ -181,7 +179,7 @@ func runRootCommandWithProviderAndClient(ctx context.Context, pInit provider.Ini
 		}),
 	)
 	if err != nil {
-		log.G(ctx).Fatal(err)
+		return 0, 0, errors.Wrap(err, "unable to create node controller")
 	}
 
 	eb := record.NewBroadcaster()
@@ -198,14 +196,8 @@ func runRootCommandWithProviderAndClient(ctx context.Context, pInit provider.Ini
 		ServiceInformer:   serviceInformer,
 	})
 	if err != nil {
-		return errors.Wrap(err, "error setting up pod controller")
+		return 0, 0, errors.Wrap(err, "error setting up pod controller")
 	}
-
-	cancelHTTP, err := setupHTTPServer(ctx, p, apiConfig)
-	if err != nil {
-		return err
-	}
-	defer cancelHTTP()
 
 	go func() {
 		if err := pc.Run(ctx, c.PodSyncWorkers); err != nil && errors.Cause(err) != context.Canceled {
@@ -215,11 +207,11 @@ func runRootCommandWithProviderAndClient(ctx context.Context, pInit provider.Ini
 
 	if c.StartupTimeout > 0 {
 		// If there is a startup timeout, it does two things:
-		// 1. It causes the VK to shutdown if we haven't gotten into an operational state in a time period
+		// 1. It causes the VirtualKubelet to shutdown if we haven't gotten into an operational state in a time period
 		// 2. It prevents node advertisement from happening until we're in an operational state
 		err = waitFor(ctx, c.StartupTimeout, pc.Ready())
 		if err != nil {
-			return err
+			return 0, 0, err
 		}
 	}
 
@@ -229,24 +221,23 @@ func runRootCommandWithProviderAndClient(ctx context.Context, pInit provider.Ini
 		}
 	}()
 
-	log.G(ctx).Info("Initialized")
+	log.G(ctx).Info("Initialised")
 
-	<-ctx.Done()
-	return nil
+	return metricsPort, k8sPort, nil
 }
 
 func waitFor(ctx context.Context, time time.Duration, ready <-chan struct{}) error {
 	ctx, cancel := context.WithTimeout(ctx, time)
 	defer cancel()
 
-	// Wait for the VK / PC close the the ready channel, or time out and return
-	log.G(ctx).Info("Waiting for pod controller / VK to be ready")
+	// Wait for the VirtualKubelet / PC close the the ready channel, or time out and return
+	log.G(ctx).Info("Waiting for pod controller / VirtualKubelet to be ready")
 
 	select {
 	case <-ready:
 		return nil
 	case <-ctx.Done():
-		return errors.Wrap(ctx.Err(), "Error while starting up VK")
+		return errors.Wrap(ctx.Err(), "Error while starting up VirtualKubelet")
 	}
 }
 

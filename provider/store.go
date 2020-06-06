@@ -1,9 +1,8 @@
 package provider
 
 import (
+	"github.com/finitum/node-cli/manager"
 	"sync"
-
-	"github.com/virtual-kubelet/node-cli/manager"
 )
 
 // Store is used for registering/fetching providers
@@ -55,7 +54,7 @@ func (s *Store) Exists(name string) bool {
 	return ok
 }
 
-// InitConfig is the config passed to initialize a registered provider.
+// InitConfig is the config passed to initialise a registered provider.
 type InitConfig struct {
 	ConfigPath        string
 	NodeName          string
@@ -66,4 +65,4 @@ type InitConfig struct {
 	ResourceManager   *manager.ResourceManager
 }
 
-type InitFunc func(InitConfig) (Provider, error)
+type InitFunc func(*InitConfig) (Provider, error)

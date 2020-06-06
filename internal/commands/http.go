@@ -18,15 +18,14 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
+	"github.com/finitum/node-cli/opts"
+	"github.com/finitum/node-cli/provider"
 	"io"
 	"net"
 	"net/http"
 	"os"
-	"time"
 
 	"github.com/pkg/errors"
-	"github.com/virtual-kubelet/node-cli/opts"
-	"github.com/virtual-kubelet/node-cli/provider"
 	"github.com/virtual-kubelet/virtual-kubelet/log"
 	"github.com/virtual-kubelet/virtual-kubelet/node/api"
 )
@@ -59,7 +58,7 @@ func loadTLSConfig(certPath, keyPath string) (*tls.Config, error) {
 	}, nil
 }
 
-func setupHTTPServer(ctx context.Context, p provider.Provider, cfg *apiServerConfig) (_ func(), retErr error) {
+func setupHTTPServer(ctx context.Context, p provider.Provider, cfg *apiServerConfig) (_ func(), metricsPort, k8sPort int, retErr error) {
 	var closers []io.Closer
 	cancel := func() {
 		for _, c := range closers {
@@ -80,21 +79,21 @@ func setupHTTPServer(ctx context.Context, p provider.Provider, cfg *apiServerCon
 	} else {
 		tlsCfg, err := loadTLSConfig(cfg.CertPath, cfg.KeyPath)
 		if err != nil {
-			return nil, err
+			return nil, 0, 0, err
 		}
 		l, err := tls.Listen("tcp", cfg.Addr, tlsCfg)
 		if err != nil {
-			return nil, errors.Wrap(err, "error setting up listener for pod http server")
+			return nil, 0, 0, errors.Wrap(err, "error setting up listener for pod http server")
 		}
+
+		cfg.Addr = l.Addr().String()
 
 		mux := http.NewServeMux()
 
 		podRoutes := api.PodHandlerConfig{
-			RunInContainer:        p.RunInContainer,
-			GetContainerLogs:      p.GetContainerLogs,
-			GetPods:               p.GetPods,
-			StreamIdleTimeout:     cfg.StreamIdleTimeout,
-			StreamCreationTimeout: cfg.StreamCreationTimeout,
+			RunInContainer:   p.RunInContainer,
+			GetContainerLogs: p.GetContainerLogs,
+			GetPods:          p.GetPods,
 		}
 		api.AttachPodRoutes(podRoutes, mux, true)
 
@@ -104,6 +103,7 @@ func setupHTTPServer(ctx context.Context, p provider.Provider, cfg *apiServerCon
 		}
 		go serveHTTP(ctx, s, l, "pods")
 		closers = append(closers, s)
+		k8sPort = l.Addr().(*net.TCPAddr).Port
 	}
 
 	if cfg.MetricsAddr == "" {
@@ -111,9 +111,9 @@ func setupHTTPServer(ctx context.Context, p provider.Provider, cfg *apiServerCon
 	} else {
 		l, err := net.Listen("tcp", cfg.MetricsAddr)
 		if err != nil {
-			return nil, errors.Wrap(err, "could not setup listener for pod metrics http server")
+			return nil, 0, 0, errors.Wrap(err, "could not setup listener for pod metrics http server")
 		}
-
+		cfg.MetricsAddr = l.Addr().String()
 		mux := http.NewServeMux()
 
 		var summaryHandlerFunc api.PodStatsSummaryHandlerFunc
@@ -129,29 +129,29 @@ func setupHTTPServer(ctx context.Context, p provider.Provider, cfg *apiServerCon
 		}
 		go serveHTTP(ctx, s, l, "pod metrics")
 		closers = append(closers, s)
+		metricsPort = l.Addr().(*net.TCPAddr).Port
 	}
 
-	return cancel, nil
+	return cancel, metricsPort, k8sPort, nil
 }
 
 func serveHTTP(ctx context.Context, s *http.Server, l net.Listener, name string) {
 	if err := s.Serve(l); err != nil {
 		select {
 		case <-ctx.Done():
+			//
 		default:
 			log.G(ctx).WithError(err).Errorf("Error setting up %s http server", name)
 		}
 	}
-	l.Close()
+	_ = l.Close()
 }
 
 type apiServerConfig struct {
-	CertPath              string
-	KeyPath               string
-	Addr                  string
-	MetricsAddr           string
-	StreamIdleTimeout     time.Duration
-	StreamCreationTimeout time.Duration
+	CertPath    string
+	KeyPath     string
+	Addr        string
+	MetricsAddr string
 }
 
 func getAPIConfig(c *opts.Opts) (*apiServerConfig, error) {
@@ -162,8 +162,6 @@ func getAPIConfig(c *opts.Opts) (*apiServerConfig, error) {
 
 	config.Addr = fmt.Sprintf(":%d", c.ListenPort)
 	config.MetricsAddr = c.MetricsAddr
-	config.StreamIdleTimeout = c.StreamIdleTimeout
-	config.StreamCreationTimeout = c.StreamCreationTimeout
 
 	return &config, nil
 }
