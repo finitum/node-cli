@@ -2,12 +2,12 @@ package provider
 
 import (
 	"context"
+	"github.com/finitum/node-cli/stats"
 	"io"
 
 	"github.com/virtual-kubelet/virtual-kubelet/node"
 	"github.com/virtual-kubelet/virtual-kubelet/node/api"
 	v1 "k8s.io/api/core/v1"
-	stats "k8s.io/kubernetes/pkg/kubelet/apis/stats/v1alpha1"
 )
 
 // Provider contains the methods required to implement a virtual-kubelet provider.

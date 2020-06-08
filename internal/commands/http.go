@@ -18,6 +18,7 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
+	"github.com/finitum/node-cli/internal/stats"
 	"github.com/finitum/node-cli/opts"
 	"github.com/finitum/node-cli/provider"
 	"io"
@@ -116,14 +117,12 @@ func setupHTTPServer(ctx context.Context, p provider.Provider, cfg *apiServerCon
 		cfg.MetricsAddr = l.Addr().String()
 		mux := http.NewServeMux()
 
-		var summaryHandlerFunc api.PodStatsSummaryHandlerFunc
+		var summaryHandlerFunc stats.PodStatsSummaryHandlerFunc
 		if mp, ok := p.(provider.PodMetricsProvider); ok {
 			summaryHandlerFunc = mp.GetStatsSummary
 		}
-		podMetricsRoutes := api.PodMetricsConfig{
-			GetStatsSummary: summaryHandlerFunc,
-		}
-		api.AttachPodMetricsRoutes(podMetricsRoutes, mux)
+
+		mux.Handle("/", stats.InstrumentHandler(stats.HandlePodStatsSummary(summaryHandlerFunc)))
 		s := &http.Server{
 			Handler: mux,
 		}
