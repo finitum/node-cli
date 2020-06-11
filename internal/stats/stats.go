@@ -4,7 +4,6 @@ import (
 	"github.com/finitum/node-cli/provider"
 	"github.com/finitum/node-cli/stats"
 	"github.com/prometheus/client_golang/prometheus"
-	"log"
 )
 
 // PodStatsSummaryHandlerFunc defines the handler for getting pod stats summaries
@@ -58,8 +57,6 @@ func NewCollector(p *provider.PodMetricsProvider) Collector {
 }
 
 func (s Collector) Collect(metrics chan<- prometheus.Metric) {
-	log.Printf("got metrics collect\n")
-
 	// Collect st
 	if s.p == nil {
 		return
