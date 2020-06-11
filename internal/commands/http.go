@@ -21,6 +21,8 @@ import (
 	"github.com/finitum/node-cli/internal/stats"
 	"github.com/finitum/node-cli/opts"
 	"github.com/finitum/node-cli/provider"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"io"
 	"net"
 	"net/http"
@@ -107,28 +109,27 @@ func setupHTTPServer(ctx context.Context, p provider.Provider, cfg *apiServerCon
 		k8sPort = l.Addr().(*net.TCPAddr).Port
 	}
 
-	if cfg.MetricsAddr == "" {
-		log.G(ctx).Info("Pod metrics server not setup due to empty metrics address")
-	} else {
-		l, err := net.Listen("tcp", cfg.MetricsAddr)
-		if err != nil {
-			return nil, 0, 0, errors.Wrap(err, "could not setup listener for pod metrics http server")
-		}
-		cfg.MetricsAddr = l.Addr().String()
-		mux := http.NewServeMux()
+	if mp, ok := p.(provider.PodMetricsProvider); ok {
+		if cfg.MetricsAddr == "" {
+			log.G(ctx).Info("Pod metrics server not setup due to empty metrics address")
+		} else {
+			l, err := net.Listen("tcp", cfg.MetricsAddr)
+			if err != nil {
+				return nil, 0, 0, errors.Wrap(err, "could not setup listener for pod metrics http server")
+			}
+			cfg.MetricsAddr = l.Addr().String()
+			mux := http.NewServeMux()
 
-		var summaryHandlerFunc stats.PodStatsSummaryHandlerFunc
-		if mp, ok := p.(provider.PodMetricsProvider); ok {
-			summaryHandlerFunc = mp.GetStatsSummary
-		}
+			prometheus.MustRegister(stats.NewCollector(&mp))
+			mux.Handle("/metrics", promhttp.Handler())
 
-		mux.Handle("/", stats.InstrumentHandler(stats.HandlePodStatsSummary(summaryHandlerFunc)))
-		s := &http.Server{
-			Handler: mux,
+			s := &http.Server{
+				Handler: mux,
+			}
+			go serveHTTP(ctx, s, l, "pod metrics")
+			closers = append(closers, s)
+			metricsPort = l.Addr().(*net.TCPAddr).Port
 		}
-		go serveHTTP(ctx, s, l, "pod metrics")
-		closers = append(closers, s)
-		metricsPort = l.Addr().(*net.TCPAddr).Port
 	}
 
 	return cancel, metricsPort, k8sPort, nil

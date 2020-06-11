@@ -7,12 +7,11 @@ require (
 	github.com/imdario/mergo v0.3.7 // indirect
 	github.com/mitchellh/go-homedir v1.1.0
 	github.com/pkg/errors v0.8.1
+	github.com/prometheus/client_golang v0.9.3-0.20190127221311-3c4408c8b829
 	github.com/virtual-kubelet/virtual-kubelet v1.2.1-0.20200504180557-8fc8b69d8f53
-	go.opencensus.io v0.21.0
 	k8s.io/api v0.0.0
 	k8s.io/apimachinery v0.0.0
 	k8s.io/client-go v10.0.0+incompatible
-	k8s.io/kubernetes v1.15.2
 )
 
 replace k8s.io/legacy-cloud-providers => k8s.io/legacy-cloud-providers v0.0.0-20190805144654-3d5bf3a310c1
