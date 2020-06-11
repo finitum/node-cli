@@ -120,8 +120,14 @@ func setupHTTPServer(ctx context.Context, p provider.Provider, cfg *apiServerCon
 			cfg.MetricsAddr = l.Addr().String()
 			mux := http.NewServeMux()
 
-			prometheus.MustRegister(stats.NewCollector(&mp))
-			mux.Handle("/metrics", promhttp.Handler())
+			reg := prometheus.NewRegistry()
+			var gatherer prometheus.Gatherer = reg
+			var registerer prometheus.Registerer = reg
+
+			registerer.MustRegister(stats.NewCollector(&mp))
+			mux.Handle("/metrics", promhttp.InstrumentMetricHandler(
+				reg, promhttp.HandlerFor(gatherer, promhttp.HandlerOpts{}),
+			))
 
 			s := &http.Server{
 				Handler: mux,
