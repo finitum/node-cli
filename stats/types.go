@@ -48,18 +48,10 @@ type NodeStats struct {
 type PodStats struct {
 	PodRef PodReference
 
-	UsageNanoCores uint64
-
-	AvailableBytesMemory uint64
-	UsageBytesMemory     uint64
-
-	AvailableBytesEphemeral uint64
-	CapacityBytesEphemeral  uint64
-	UsedBytesEphemeral      uint64
-
-	AvailableBytesStorage uint64
-	CapacityBytesStorage  uint64
-	UsedBytesStorage      uint64
+	UsageNanoCores     uint64
+	UsageBytesMemory   uint64
+	UsedBytesEphemeral uint64
+	UsedBytesStorage   uint64
 }
 
 // PodReference contains enough information to locate the referenced pod.
